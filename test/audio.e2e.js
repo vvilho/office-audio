@@ -1,0 +1,65 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import https from 'node:https';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { chromium, expect } from '@playwright/test';
+import { createOfficeServer } from '../server/app.js';
+
+test('HTTPS: two receivers get actual audio; stop, restart, leave, rejoin and host reconnect', { timeout: 60000 }, async t => {
+  const temp = mkdtempSync(join(tmpdir(), 'office-audio-test-'));
+  t.after(() => rmSync(temp, { recursive: true, force: true }));
+  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(temp, 'key.pem'), '-out', join(temp, 'cert.pem'), '-days', '1', '-subj', '/CN=localhost'], { stdio: 'ignore' });
+  const origins = [], urls = [];
+  const office = createOfficeServer({ serverFactory: app => https.createServer({ key: readFileSync(join(temp, 'key.pem')), cert: readFileSync(join(temp, 'cert.pem')) }, app), dist: fileURLToPath(new URL('../dist', import.meta.url)), origins, listenerUrls: urls });
+  await new Promise(r => office.server.listen(0, '127.0.0.1', r));
+  t.after(() => office.close());
+  const origin = `https://127.0.0.1:${office.server.address().port}`; origins.push(origin); urls.push(origin);
+  const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || undefined });
+  t.after(() => browser.close());
+  const errors = [];
+  const make = async listener => {
+    const context = await browser.newContext({ ignoreHTTPSErrors: true, viewport: listener ? { width: 390, height: 844 } : { width: 1280, height: 1000 } });
+    await context.addInitScript(({ listener }) => {
+      window.testPeers = [];
+      const Original = window.RTCPeerConnection;
+      window.RTCPeerConnection = class extends Original { constructor(...args) { super(...args); window.testPeers.push(this); } };
+      if (listener) navigator.mediaDevices.getUserMedia = () => { throw new Error('Listener must never request microphone'); };
+    }, { listener });
+    const page = await context.newPage(); page.on('pageerror', e => errors.push(e.message)); return page;
+  };
+  const host = await make(false), a = await make(true), b = await make(true);
+  const hostUrl = `${origin}/host#host=${office.hostToken}`, listenerUrl = `${origin}/#join=${office.joinToken}`;
+  await host.goto(hostUrl); await expect(host.getByText('● Yhteys palvelimeen')).toBeVisible();
+  await Promise.all([a.goto(listenerUrl), b.goto(listenerUrl)]);
+  await a.getByRole('button', { name: '▶ Kuuntele', exact: true }).click();
+  await b.getByRole('button', { name: '▶ Kuuntele', exact: true }).click();
+  await expect(host.getByText('2 kuuntelijaa')).toBeVisible();
+  await host.getByRole('button', { name: 'Kokeile yhteyttä testiäänellä' }).click();
+  const energy = page => page.evaluate(async () => {
+    let total = 0;
+    for (const pc of window.testPeers.filter(p => p.connectionState === 'connected')) for (const s of (await pc.getStats()).values()) if (s.type === 'inbound-rtp' && s.kind === 'audio') total += s.totalAudioEnergy || 0;
+    return total;
+  });
+  await expect.poll(() => energy(a), { timeout: 15000 }).toBeGreaterThan(0);
+  await expect.poll(() => energy(b), { timeout: 15000 }).toBeGreaterThan(0);
+  console.log('Both receivers decoded nonzero audio energy over HTTPS/WebRTC.');
+  await host.getByRole('button', { name: '■ Lopeta lähetys' }).click();
+  await expect(a.getByRole('status')).toHaveText('Odotetaan lähettäjää…');
+  assert.equal(await a.evaluate(() => document.querySelector('audio').srcObject), null);
+  await host.getByRole('button', { name: 'Kokeile yhteyttä testiäänellä' }).click();
+  await expect.poll(() => energy(a), { timeout: 15000 }).toBeGreaterThan(0);
+  await a.getByRole('button', { name: 'Lopeta kuuntelu' }).click();
+  await expect(host.getByText('1 kuuntelijaa')).toBeVisible();
+  await a.getByRole('button', { name: '▶ Kuuntele', exact: true }).click();
+  await expect.poll(() => energy(a), { timeout: 15000 }).toBeGreaterThan(0);
+  await host.reload();
+  await expect(host.getByRole('button', { name: 'Kokeile yhteyttä testiäänellä' })).toBeEnabled();
+  await host.getByRole('button', { name: 'Kokeile yhteyttä testiäänellä' }).click();
+  await expect.poll(() => energy(b), { timeout: 15000 }).toBeGreaterThan(0);
+  assert.equal(await a.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'Mobile has no horizontal overflow');
+  assert.deepEqual(errors, []);
+});

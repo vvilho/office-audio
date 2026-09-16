@@ -1,0 +1,30 @@
+{
+  "name": "office-audio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "build": "vite build",
+    "start": "node server/index.js",
+    "demo": "node server/index.js --local",
+    "certs": "node scripts/certs.js",
+    "test": "node --test test/*.test.js",
+    "check": "npm run build && npm test",
+    "test:e2e": "npm run build && node --test test/audio.e2e.js",
+    "tunnel": "node server/index.js --tunnel"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "qrcode": "^1.5.4",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "vite": "^7.1.0",
+    "@playwright/test": "^1.55.0"
+  }
+}

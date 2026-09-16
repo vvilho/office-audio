@@ -1,0 +1,7 @@
+node_modules/
+dist/
+certs/
+.env*
+!.env.example
+*.log
+test-results/
