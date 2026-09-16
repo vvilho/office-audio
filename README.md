@@ -48,6 +48,28 @@ TURN_RELAY_ONLY=true
 
 TURN-asetusten käsittely ja tunnistautuminen on testattu simuloidulla palveluntarjoajalla. Varsinainen Metered-äänenvälitys pitää vielä varmistaa oikealla avaimella ja eri verkkojen laitteilla. Alareunan TURN-teksti ilmaisee asetusten käytön; se ei yksin todista, että ääni saapuu.
 
+## Pysyvä osoite ja QR: nimetty Cloudflare Tunnel
+
+Cloudflaren hallinnassa luodun tunnelin Published application -reitti:
+
+- Hostname: `audio.koiraharju.fi`
+- Service: `http://127.0.0.1:8443`
+
+Lisää `.env`-tiedostoon:
+
+```dotenv
+CLOUDFLARE_TUNNEL_TOKEN=KOKO_PITKA_TOKEN
+PUBLIC_URL=https://audio.koiraharju.fi
+```
+
+**Token ei ole Tunnel ID.** Kopioi koko pitkä arvo Cloudflaren macOS-asennus-/käynnistyskomennosta (`service install` -osan tai `--token`-valitsimen jäljessä). Älä kopioi itse komentoa. Älä julkaise tokenia Gitissä.
+
+Käynnistä `npm run tunnel`. Kun molemmat asetukset ovat täytetty, appi ajaa nimettyä tunnelia Quick Tunnelin sijaan. Cloudflaren reitin pitää vastata käytettyä porttia. Token välitetään cloudflaredille ympäristömuuttujana, ei prosessin komentorivillä. Appi odottaa tunnelin rekisteröitymistä ennen kuin ilmoittaa sen olevan valmis. Rekisteröityminen ei yksin takaa, että DNS ja reitti on määritetty oikein.
+
+Sekä lähettäjän että kuuntelijoiden tunnukset tallennetaan ensimmäisellä käynnistyksellä yksityiseen `.local/session.json`-tiedostoon. Osoite ja QR pysyvät samoina uudelleenkäynnistyksessä, kun `PUBLIC_URL` ja tämä tiedosto säilyvät. Ensimmäinen käynnistys tämän päivityksen jälkeen luo uudet pysyvät tunnukset, joten jaa QR silloin uudelleen. `.local/` on suljettu pois Gitistä. Älä jaa sen sisältöä; poista session.json vain, kun haluat tarkoituksella mitätöidä vanhat liittymislinkit. Macin ja appin pitää olla käynnissä, jotta osoite toimii.
+
+Jos haluat takaisin Quick Tunneliin, tyhjennä **molemmat** Cloudflare-asetukset. Sen domain vaihtuu edelleen käynnistyksessä, vaikka huoneen tunnukset nyt säilyvät.
+
 ## Helppo HTTPS-linkki puhelimille: cloudflared
 
 Tämä vaihtoehto poistaa omien HTTPS-varmenteiden asentamisen kuuntelijoiden laitteisiin. Tarvitset internetyhteyden tunnelin käyttöön; ilman TURN-asetuksia kuuntelijoiden ja lähettäjän pitää olla samassa, laitteiden välisen liikenteen sallivassa lähiverkossa. TURNin kanssa eri internetyhteydet ovat mahdollisia.
@@ -66,7 +88,7 @@ npm run tunnel
 3. Odota päätteeseen kahta linkkiä: **julkinen kuuntelulinkki** `https://….trycloudflare.com/#join=…` sekä **lähettäjän linkki** `http://localhost:8443/host#host=…`.
 4. Avaa lähettäjän localhost-linkki Chromessa/Edgessä samassa Macissa. Localhost sallii äänenkaappauksen myös HTTP:llä. Valitse BlackHole ja aloita lähetys, tai kokeile ensin testiääntä.
 5. Lähettäjän QR-koodi ja kopioitava linkki osoittavat nyt automaattisesti Cloudflaren HTTPS-osoitteeseen. Kuuntelija avaa sen tavallisessa selaimessa, painaa Kuuntele ja kuulee äänen omista kuulokkeistaan. Omia varmenteita ei tarvitse asentaa.
-6. **Ctrl+C** sulkee sekä appin että cloudflared-prosessin. Uusi käynnistys luo uuden osoitteen ja uudet liittymistunnukset. Älä sulje päätettä kuuntelun aikana.
+6. **Ctrl+C** sulkee sekä appin että cloudflared-prosessin. Quick Tunnelin uusi käynnistys luo uuden osoitteen. Huoneen liittymistunnukset säilyvät `.local/session.json`-tiedostossa. Älä sulje päätettä kuuntelun aikana.
 
 **Mitä tunnelissa kulkee?** Sivusto ja WebSocket-signalointi kulkevat Cloudflaren kautta. Varsinainen ääni kulkee erikseen WebRTC:llä: joko suoraan laitteiden välillä tai TURNin kautta. Cloudflare-tunneli ei yksin välitä ääntä eri verkkojen välillä.
 
@@ -158,7 +180,7 @@ Pidä palvelin ja lähettäjän välilehti käynnissä. Estä Macin nukahtaminen
 caffeinate -i npm start
 ```
 
-Tämä korvaa tavallisen `npm start` -komennon; älä aja molempia samassa portissa. Lopeta päätteestä Ctrl+C. Lähettäjän reload tai äänilaitteen irtoaminen edellyttää lähetyksen aloittamista uudelleen. Katkennut signalointiyhteys yritetään palauttaa automaattisesti; palvelimen uudelleenkäynnistys luo uudet liittymislinkit.
+Tämä korvaa tavallisen `npm start` -komennon; älä aja molempia samassa portissa. Lopeta päätteestä Ctrl+C. Lähettäjän reload tai äänilaitteen irtoaminen edellyttää lähetyksen aloittamista uudelleen. Katkennut signalointiyhteys yritetään palauttaa automaattisesti; nimetyllä tunnelilla palvelimen uudelleenkäynnistys säilyttää liittymislinkit; Quick Tunnelin domain vaihtuu.
 
 ## Viive ja kapasiteetti
 
@@ -187,7 +209,8 @@ Tämä korvaa tavallisen `npm start` -komennon; älä aja molempia samassa porti
 ## Toteutus ja rajaukset
 
 - `server/index.js`: HTTPS-käynnistys, LAN-osoitteet, paikallinen demotila ja tunnelitila.
-- `server/tunnel.js`: cloudflared-prosessi, Quick Tunnel -osoite ja prosessin sulkeminen.
+- `server/tunnel.js`: cloudflared-prosessi, Quick Tunnel tai nimetty tunneli ja prosessin sulkeminen.
+- `server/session.js`: pysyvät paikalliset liittymistunnukset.
 - `server/app.js`: staattinen React-sovellus, QR-API, WebSocket-signalointi, roolit, yhteysraja ja heartbeat.
 - `src/audio.js`: BlackHole-kaappaus, WebRTC-yhteydet, ICE-jonotus ja yhteyssukupolvet, uudelleenliittyminen, testiääni, tulotaso.
 - `src/main.jsx`, `src/style.css`: responsiiviset lähettäjä- ja kuuntelijanäkymät.

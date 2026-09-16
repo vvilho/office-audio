@@ -38,3 +38,31 @@ test('loopback proxy accepts registered public HTTPS origin, emits WSS CSP and t
   ws.send(JSON.stringify({ type: 'auth', role: 'listener', token: office.joinToken }));
   assert.equal((await ready).type, 'ready');
 });
+
+import { namedTunnelConfig, startTunnel } from '../server/tunnel.js';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+
+test('named tunnel config requires HTTPS origin and rejects tunnel ID', () => {
+  assert.equal(namedTunnelConfig(), null);
+  assert.throws(() => namedTunnelConfig('token', ''));
+  assert.throws(() => namedTunnelConfig('', 'https://audio.example.com'));
+  assert.throws(() => namedTunnelConfig('11111111-2222-3333-4444-555555555555', 'https://audio.example.com'));
+  for (const url of ['http://audio.example.com', 'https://audio.example.com/path', 'https://user:pass@audio.example.com', 'https://audio.example.com/#key']) assert.throws(() => namedTunnelConfig('token', url));
+  assert.equal(namedTunnelConfig('token', 'https://audio.example.com/').publicUrl, 'https://audio.example.com');
+});
+test('named tunnel keeps token out of process arguments, waits for connection and stops child', async () => {
+  const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  child.pid = 42; child.exitCode = null; child.signalCode = null;
+  child.kill = signal => { child.signalCode = signal; queueMicrotask(() => child.emit('exit', null, signal)); };
+  const tunnel = startTunnel(8443, { token: 'private-test-token', publicUrl: 'https://audio.example.com', spawnProcess: (name, args, options) => {
+    assert.equal(name, 'cloudflared'); assert.deepEqual(args, ['tunnel', '--no-autoupdate', 'run']);
+    assert.equal(options.env.TUNNEL_TOKEN, 'private-test-token');
+    assert.ok(!args.join(' ').includes('private-test-token')); return child;
+  } });
+  let ready = false; tunnel.ready.then(() => { ready = true; });
+  child.stderr.write('Starting tunnel'); await Promise.resolve(); assert.equal(ready, false);
+  child.stderr.write('Registered tunnel connection connIndex=0');
+  assert.equal(await tunnel.ready, 'https://audio.example.com');
+  await tunnel.stop(); assert.equal(child.signalCode, 'SIGTERM');
+});

@@ -5,8 +5,8 @@ import QRCode from 'qrcode';
 
 const token = () => randomBytes(24).toString('hex');
 const equals = (a, b) => typeof a === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
-export function createOfficeServer({ serverFactory, dist, origins, listenerUrls, maxListeners = 20, tunnel = false, rtcProvider = async () => ({ iceServers: [], iceTransportPolicy: 'all' }), turnEnabled = false }) {
-  const hostToken = token(), joinToken = token();
+export function createOfficeServer({ serverFactory, dist, origins, listenerUrls, maxListeners = 20, tunnel = false, rtcProvider = async () => ({ iceServers: [], iceTransportPolicy: 'all' }), turnEnabled = false, sessionTokens }) {
+  const hostToken = sessionTokens?.hostToken || token(), joinToken = sessionTokens?.joinToken || token();
   const app = express();
   app.disable('x-powered-by');
   // Only enable proxy headers for the loopback-only cloudflared origin server.
@@ -38,6 +38,8 @@ export function createOfficeServer({ serverFactory, dist, origins, listenerUrls,
   app.use(express.static(dist));
   app.get('/host', (req, res) => res.sendFile(`${dist}/index.html`));
   const server = serverFactory(app);
+  const sockets = new Set();
+  server.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); });
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
   let host = null, live = false;
   const listeners = new Map();
@@ -104,6 +106,7 @@ export function createOfficeServer({ serverFactory, dist, origins, listenerUrls,
   heartbeat.unref();
   return { server, hostToken, joinToken, close: async () => {
     clearInterval(heartbeat); for (const ws of wss.clients) ws.terminate();
-    wss.close(); await new Promise(resolve => server.close(resolve));
+    wss.close();
+    await new Promise(resolve => { server.close(resolve); for (const socket of sockets) socket.destroy(); });
   } };
 }

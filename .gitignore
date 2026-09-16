@@ -5,3 +5,6 @@ certs/
 !.env.example
 *.log
 test-results/
+
+# Persistent private room links
+.local/
